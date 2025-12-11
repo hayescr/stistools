@@ -86,7 +86,8 @@ class OrbFileError(ValueError):
 def barycentric_correction(table_names, verbose=True, distance=1e9,
                            hst_orb=None, in_col='TIME',
                            time_script=False, outfiles=None):
-    """
+    """ Calculate barycentric corrections for HST's position.
+    
         Calculates time-delay barycentric corrections from HST's position
         to the Solar System barycenter. This correction includes the classic
         geometric Roemer delay, as well as the general relativistic Einstein
@@ -113,17 +114,14 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
         table_names: list[str]
             List of strings with the file names to be time-corrected.
 
+        verbose: bool
+            Prints completion messages during execution.
+
         distance: float
             Distance the object is from HST in AU. Default is a trillion
             AU. Most important for objects in our Solar System as it
             is repsonsible for second-order correction, up to minutes.
             At 1 parsec, the correction can be on the order of a few ms.
-
-        output: str
-            Name of the output FITS file. Will overwrite existing file.
-
-        verbose: bool
-            Prints completion messages during execution.
 
         hst_orb: str
             Name of HST orbital file (generally starts p, ends as .fit) that
@@ -146,7 +144,8 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
 
         Returns
         -------
-        Nothing is returned directly, but the file is written to output.
+        None
+            Nothing is returned directly, but the file is written to output.
     """
 
     if time_script:
@@ -405,8 +404,7 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
 
 
 def calc_delay_jpl(times, ra, dec, distance=1e9, verbose=True):
-    """
-    Calculate the barycentric light-travel time correction for HST using JPL Horizons.
+    """Calculate the barycentric light-travel time correction for HST using JPL Horizons.
 
     Compute the barycentric light-travel time delay for the Hubble Space Telescope (HST)
     at the provided observation times and a target sky position (RA, Dec) by querying
@@ -418,13 +416,17 @@ def calc_delay_jpl(times, ra, dec, distance=1e9, verbose=True):
     ----------
     times : array-like or `~astropy.time.Time`
         Observation times in Modified Julian Date (MJD). Can be a scalar or an array.
+        
     ra : float or `~astropy.units.Quantity`
         Right ascension of the target in degrees.
+        
     dec : float or `~astropy.units.Quantity`
         Declination of the target in degrees.
+        
     distance : float, optional
         Distance to the target (default ``1e9``). This value is used in the finite-distance
         correction term. (See ``Notes`` for how it enters the equation.)
+        
     verbose : bool, optional
         If True (default) print diagnostics about interpolation, the finite-distance
         correction, and the computed light-travel times.
@@ -643,8 +645,7 @@ def calc_delay_jpl(times, ra, dec, distance=1e9, verbose=True):
 
 
 def calc_delay_orbfile(times, ra, dec, hst_orb, distance=1e9, verbose=True, in_col='Time'):
-    """
-    Calculate the light-travel time correction for HST observations using an orbit file.
+    """Calculate the light-travel time correction for HST observations using an orbit file.
 
     This function computes the barycentric light-travel time delay for the Hubble Space Telescope (HST)
     given a set of observation times and a target sky position (RA, Dec). It interpolates HST’s position
@@ -655,19 +656,25 @@ def calc_delay_orbfile(times, ra, dec, hst_orb, distance=1e9, verbose=True, in_c
     ----------
     times : array-like or float
         Observation times in Modified Julian Date (MJD), corresponding to HST exposures.
+        
     ra : float
         Right ascension of the target in degrees.
+        
     dec : float
         Declination of the target in degrees.
+        
     hst_orb : str
         Path to the HST orbit FITS file. This file must contain columns `TIME`, `X`, `Y`, and `Z`
         giving HST’s position (in km) relative to the Earth's center.
+        
     distance : float, optional
         Distance to the target in kilometers (default is `1e9`, effectively infinite distance).
         Used to apply the finite-distance light-travel time correction.
+        
     verbose : bool, optional
         If True (default), print information about the finite-distance correction
         and the calculated light-travel times.
+        
     in_col : str, optional
         If orbital file uses something other than 'Time' for the time axis, replace
         with the correct column name.
@@ -821,8 +828,7 @@ def calc_delay_orbfile(times, ra, dec, hst_orb, distance=1e9, verbose=True, in_c
 
 
 def odelay_file_compare(file1, file2):
-    """
-    Compare timing information between two FITS files.
+    """Compare timing information between two FITS files.
 
     Computes and prints the differences in exposure start times and data timestamps
     between two FITS files, typically used for verifying time coordinate consistency
@@ -832,6 +838,7 @@ def odelay_file_compare(file1, file2):
     ----------
     file1 : str
         Path to the first FITS file.
+        
     file2 : str
         Path to the second FITS file to compare against file1.
 
