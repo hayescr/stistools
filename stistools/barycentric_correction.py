@@ -157,26 +157,22 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             print(f"odelaytime: processing {in_table_file} ...")
 
         # Copy to new outfile, otherwise overwrite input file.
+        # TODO what should happen if the length of table_names and outfiles don't match?
+        filename = in_table_file
         if outfiles is not None:
+            filename = outfiles[ii]
             if verbose:
-                print(f"Copying {in_table_file} to {outfiles[ii]}")
-            shutil.copy(in_table_file, outfiles[ii])
-            in_hdul = fits.open(outfiles[ii], mode='update')
-
-        else:
-            in_hdul = fits.open(in_table_file, mode='update')
-
+                print(f"Copying {in_table_file} to {filename}")
+            shutil.copy(in_table_file, filename)
+            
+        in_hdul = fits.open(filename)
 
         # determine the file type, based on the first extension
         # original code (ln 124) contains some kind of catch all
         # for SCI_IMAGE? It also caught anything outside of those options,
         # might want to add that back in as well.
         extname = in_hdul[1].header['EXTNAME']
-        if extname == "EVENTS":
-            filetype = "EVENTS_TABLE"
-        elif extname == "SCI":
-            filetype = "X1D_TABLE"
-        else:
+        if extname not in ["EVENTS", "SCI"]:
             raise ValueError(f'Unexpected extension name:  {extname}')
 
         if 'DELAYCOR' in in_hdul[0].header and \
@@ -205,11 +201,11 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
         else:
             nextend = 1
 
-        if filetype == "EVENTS_TABLE":
+        if extname == "EVENTS":
             # assume (for now) that the last extension is a GTI table
             nevents_tab = max(nextend - 1, 1)
             nsci_ext = 0
-        elif filetype == "X1D_TYPE":
+        elif extname == "SCI":
             nevents_tab = 0
             nsci_ext = nextend
         else:
@@ -223,35 +219,22 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
         #t0_delay = all_delay(mjd1, parallax, objvec, earth_ephem_table,
         #                     len(earth_ephem_table), obs_ephem_table, npts_obs)
 
-        if hst_orb is None:
-            t0_delay = calc_delay_jpl(mjd1, ra, dec, distance=distance)
-        else:
-            t0_delay = calc_delay_orbfile(mjd1, ra, dec, hst_orb, distance=distance)
+        t0_delay = calc_delay(mjd1, ra, dec, hst_orb, distance=distance)
 
-
-        if filetype == "EVENTS_TABLE":
+        if extname == "EVENTS":
             # update times in GTI table
             if 'GTI' in in_hdul:
                 gti_tab = in_hdul['GTI'].data
-                nrows = len(gti_tab)
                 for row in gti_tab:
                     tm = row['START']
                     epoch = mjd1 + tm / SECPERDAY
-
-
-                    if hst_orb is None:
-                        delta_sec = calc_delay_jpl(epoch, ra, dec, distance=distance)
-                    else:
-                        delta_sec = calc_delay_orbfile(epoch, ra, dec, hst_orb, distance=distance)
-
+                    delta_sec = calc_delay(epoch, ra, dec, hst_orb, distance=distance)
+                    
                     row['START'] = tm + (delta_sec - t0_delay).value * SECPERDAY
 
                     tm = row['STOP']
                     epoch = mjd1 + tm / SECPERDAY
-                    if hst_orb is None:
-                        delta_sec = calc_delay_jpl(epoch, ra, dec, distance=distance)
-                    else:
-                        delta_sec = calc_delay_orbfile(epoch, ra, dec, hst_orb, distance=distance)
+                    delta_sec = calc_delay(epoch, ra, dec, hst_orb, distance=distance)
 
                     row['STOP'] = tm + (delta_sec - t0_delay).value * SECPERDAY
 
@@ -288,10 +271,7 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             #re-written to do all rows at once, so we can interpolate times,
             #instead of calling Horizons 4.5 million times
             epoch_array = mjd1 + time_array / SECPERDAY
-            if hst_orb is None:
-                delta_sec = calc_delay_jpl(epoch_array, ra, dec, distance=distance)
-            else:
-                delta_sec = calc_delay_orbfile(epoch_array, ra, dec, hst_orb, distance=distance)
+            delta_sec = calc_delay(epoch_array, ra, dec, hst_orb, distance=distance)
 
             # This is correcting for the difference between the new time interval
             # and the *corrected* exposure start time
@@ -302,19 +282,13 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             in_hdul['EVENTS', e_indx].data[in_col] = time_array
 
             # add delaytime to EXPSTART and EXPEND, and update header
-            if hst_orb is None:
-                delta_sec = calc_delay_jpl(mjd1, ra, dec, distance=distance)
-            else:
-                delta_sec = calc_delay_orbfile(mjd1, ra, dec, hst_orb, distance=distance)
+            delta_sec = calc_delay(mjd1, ra, dec, hst_orb, distance=distance)
 
             events_tab.header['EXPSTART'] = mjd1 + delta_sec.value
 
 
             # DOUBLE CHECK FOR TYPO, should probably be mjd2
-            if hst_orb is None:
-                delta_sec = calc_delay_jpl(mjd2, ra, dec, distance=distance)
-            else:
-                delta_sec = calc_delay_orbfile(mjd2, ra, dec, hst_orb, distance=distance)
+            delta_sec = calc_delay(mjd2, ra, dec, hst_orb, distance=distance)
 
             events_tab.header['EXPEND'] = mjd2 + delta_sec.value
             in_hdul.flush()
@@ -334,19 +308,13 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             # add delaytime to EXPSTART and EXPEND, and update header
             if "EXPSTART" in cur_tab.header:
                 mjd1 = cur_tab.header['EXPSTART']
-                if hst_orb is None:
-                    delta_sec = calc_delay_jpl(mjd1, ra, dec, distance=distance)
-                else:
-                    delta_sec = calc_delay_orbfile(mjd1, ra, dec, hst_orb, distance=distance)
+                delta_sec = calc_delay(mjd1, ra, dec, hst_orb, distance=distance)
                 cur_tab.header['EXPSTART'] = mjd1 + delta_sec.value
                 modified = True
 
             if "EXPEND" in cur_tab.header:
                 mjd2 = cur_tab.header['EXPEND']
-                if hst_orb is None:
-                    delta_sec = calc_delay_jpl(mjd2, ra, dec, distance=distance)
-                else:
-                    delta_sec = calc_delay_orbfile(mjd2, ra, dec, hst_orb, distance=distance)
+                delta_sec = calc_delay(mjd2, ra, dec, hst_orb, distance=distance)
                 cur_tab.header['EXPEND'] = mjd2 + delta_sec.value
                 modified = True
 
@@ -364,20 +332,13 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
         # COS has no TEXPSTRT in primary header
         if in_hdul[0].header['INSTRUME'] == "STIS":
             mjd1 = in_hdul[0].header['TEXPSTRT']
-            if hst_orb is None:
-                delta_sec = calc_delay_jpl(mjd1, ra, dec, distance=distance)
-            else:
-                delta_sec = calc_delay_orbfile(mjd1, ra, dec, hst_orb,
-                                               distance=distance)
+            delta_sec = calc_delay(mjd1, ra, dec, hst_orb, distance=distance)
 
             in_hdul[0].header['TEXPSTRT'] = mjd1 + delta_sec.value
 
             mjd2 = in_hdul[0].header['TEXPEND']
-            if hst_orb is None:
-                delta_sec = calc_delay_jpl(mjd2, ra, dec, distance=distance)
-            else:
-                delta_sec = calc_delay_orbfile(mjd2, ra, dec, hst_orb,
-                                               distance=distance)
+            delta_sec = calc_delay(mjd2, ra, dec, hst_orb, distance=distance)
+            
             in_hdul[0].header['TEXPEND'] = mjd2 + delta_sec.value
 
         # add keyword to flag the fact that the times have been corrected
@@ -402,6 +363,50 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             tcheck3 = time.time()
             print(f'Checkpoint 3: {tcheck3 - tstart} s')
 
+
+def calc_delay(mjd1, ra, dec, hst_orb=None, distance=1e9, verbose=True, in_col='Time'):
+    """Calculate the barycentric light-travel time correction.
+
+    Parameters
+    ----------
+    times : array-like or float
+        Observation times in Modified Julian Date (MJD), corresponding to HST exposures.
+        
+    ra : float
+        Right ascension of the target in degrees.
+        
+    dec : float
+        Declination of the target in degrees.
+        
+    hst_orb : str
+        Path to the HST orbit FITS file. This file must contain columns `TIME`, `X`, `Y`, and `Z`
+        giving HST’s position (in km) relative to the Earth's center.
+        
+    distance : float, optional
+        Distance to the target in kilometers (default is `1e9`, effectively infinite distance).
+        Used to apply the finite-distance light-travel time correction.
+        
+    verbose : bool, optional
+        If True (default), print information about the finite-distance correction
+        and the calculated light-travel times.
+        
+    in_col : str, optional
+        If orbital file uses something other than 'Time' for the time axis, replace
+        with the correct column name.
+
+    Returns
+    -------
+    lt_time : `~astropy.units.Quantity`
+        The barycentric light-travel time correction(s) in days, including the finite-distance correction term.
+    """
+
+    if hst_orb is None:
+        lt_time = calc_delay_jpl(mjd1, ra, dec, distance=distance, verbos=verbose)
+    else:
+        lt_time = calc_delay_orbfile(mjd1, ra, dec, hst_orb, distance=distance, verbos=verbose, in_col=in_col)
+        
+    return lt_time
+    
 
 def calc_delay_jpl(times, ra, dec, distance=1e9, verbose=True):
     """Calculate the barycentric light-travel time correction for HST using JPL Horizons.
