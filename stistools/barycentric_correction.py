@@ -349,7 +349,19 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             
   
 def calc_delay(times, ra, dec, hst_orb=None, distance=1e9, in_col='Time', verbose=True):
-    """Calculate the barycentric light-travel time correction.
+    """Calculate the light-travel time correction for HST observations.
+    
+    This function computes the barycentric light-travel time delay for the Hubble Space Telescope (HST)
+    given a set of observation times and a target sky position (RA, Dec). 
+    
+    If an HST orbit file is provided, it interpolates HST’s position from a provided orbit file, combines 
+    it with Earth's barycentric position, and calculates the light-travel time correction to the Solar 
+    System barycenter, including a finite-distance correction term.
+
+    If an HST orbit file is not provided, this function queries JPL Horizons for HST's geocentric 
+    state-vector (or interpolating a regular-sampled vector set) and combining it with Earth's 
+    barycentric position. A finite-distance correction is applied to account for targets that are 
+    not at infinite distance.
 
     Parameters
     ----------
@@ -369,19 +381,50 @@ def calc_delay(times, ra, dec, hst_orb=None, distance=1e9, in_col='Time', verbos
     distance : float, optional
         Distance to the target in kilometers (default is `1e9`, effectively infinite distance).
         Used to apply the finite-distance light-travel time correction.
-        
-    verbose : bool, optional
-        If True (default), print information about the finite-distance correction
-        and the calculated light-travel times.
-        
+
     in_col : str, optional
         If orbital file uses something other than 'Time' for the time axis, replace
         with the correct column name.
+                
+    verbose : bool, optional
+        If True (default), print information about the finite-distance correction
+        and the calculated light-travel times.
 
     Returns
     -------
     lt_time : `~astropy.units.Quantity`
-        The barycentric light-travel time correction(s) in days, including the finite-distance correction term.
+        Light-travel time correction(s) (Astropy Quantity) in days. This is the time
+        that should be added to the observation times to obtain barycentric arrival times,
+        and includes the finite-distance correction.
+
+    Notes
+    -----
+    - Uses the JPL planetary ephemeris (``jpl``) via Astropy's ``solar_system_ephemeris``
+      for consistency with Horizons.
+    - The finite-distance correction implemented here follows the same algebraic
+      form used elsewhere in this codebase:
+        correction_term = (-0.5 / D) * (|r|^2 - (n·r)^2) / c
+      where `r` is the HST barycentric position vector, `n` is the unit vector toward
+      the target, `D` is the provided `distance`, and `c` is the speed of light.
+      The expression is converted into days before being returned.
+    - Requires `astroquery` (Horizons), Astropy with the `jplephem` ephemeris available,
+      and a working internet connection for Horizons queries when not using a local orbit file.        
+        
+    Examples
+    --------
+    >>> # single time (MJD), RA/Dec in degrees
+    >>> barycentric_correction.calc_delay_jpl(55521.123, 210.8023, -47.393)
+    Finite distance correction: -7.804152203899432e-08 s
+    Light travel times: -405.56807173759836 s
+
+    >>> # multiple times
+    >>> times = [60200.123, 60200.124, 60200.125]
+    >>> lt_array = calc_delay_jpl(times, 210.8023, -47.393, distance=1e9, verbose=False)
+    
+    >>> # Using an HST orbit file
+    >>> barycentric_correction.calc_delay([55521.123], 210.8023, -47.393, hst_orb='pubj0000r.fit')
+    Finite distance correction: [-7.80563708e-08] s
+    Light travel times: [-405.56687377] s
     """
     
     has_hst_orb = False
@@ -469,20 +512,55 @@ def calc_delay(times, ra, dec, hst_orb=None, distance=1e9, in_col='Time', verbos
     return lt_time
 
 def get_hst_location(times, times_geo, hst_orb=None, in_col='Time', verbose=True):
-    
-    # Get HST's location
+    """Get HST's location from an HST orbit file or through a JPL Horizon query.
 
-    # Interpolate HST's position if more than just one time:
-    # We can't query all times to Horizons because there's
-    # too many. Let's get HST's position every minutes instead,
-    # and then interpolate...
-    # Position every minute should be good enough. If we were
-    # off by a minute, that would be a max of 6ms light travel time
-    # So with interpolation, we'll be dandy.
-    # Adding one minute to each side to avoid extrapolating
+    Parameters
+    ----------
+    times : array-like or `~astropy.time.Time`
+        Observation times in Modified Julian Date (MJD). Can be a scalar or an array.
+        
+    times_geo : array-like or `~astropy.time.Time`
+        Geocentric observation times.
+        
+    hst_orb : str, optional
+        Path to the HST orbit FITS file. This file must contain columns `TIME`, `X`, `Y`, and `Z`
+        giving HST’s position (in km) relative to the Earth's center.
+        
+    in_col : str, optional
+        If orbital file uses something other than 'Time' for the time axis, replace
+        with the correct column name.
+                
+    verbose : bool, optional
+        If True (default), print additional status information.
 
+    Returns
+    -------
+    hstarr : `array-like, ~astropy.units.Quantity`
+        HST position vector stored as a list of cartesian coordinates
+        in astropy units of AU.
 
-    # HST ORB file
+    Raises
+    ------
+    OrbFileError
+        If the orbit file does not cover the requested time range.
+        
+    Exception
+        If the Horizons query or interpolation fails to produce vectors covering the
+        requested time range, or if the vector transformation cannot be performed.
+        
+    Notes
+    -----
+    - When using an HST orbit file, interpolates HST’s orbital position at each observation time using cubic interpolation
+      to avoid excessive Horizons queries.  The resulting correction term accounts for HST’s motion relative to the Solar System barycenter.
+    - For multiple times the function queries Horizons for HST (-48, location 500)
+      with a regular step (1 minute) over the time range (plus a 5-minute margin)
+      and cubic-interpolates the returned vectors to the requested times. For a single
+      scalar time it queries Horizons directly at that epoch.
+    - Requires `astroquery` (Horizons), Astropy with the `jplephem` ephemeris available,
+      and a working internet connection for Horizons queries when not using a local orbit file.
+    """
+
+    # If using an HST ORB file
     if hst_orb is not None:
         with fits.open(hst_orb) as hdu_orb:
             f_hstx = interp1d(float(hdu_orb[1].header['FIRSTMJD']) + hdu_orb[1].data[in_col].astype(np.float64) / SECPERDAY, hdu_orb[1].data['X'], kind='cubic')
@@ -498,8 +576,16 @@ def get_hst_location(times, times_geo, hst_orb=None, in_col='Time', verbose=True
                             'Make sure you have got the correct one.') from e
 
         hstarr = [hstvecx, hstvecy, hstvecz] * u.km
+        
     # If no HST ORB file    
-    # Interpolate HST's position if more than just one time
+    # Interpolate HST's position if more than just one time:
+    # We can't query all times to Horizons because there's
+    # too many. Let's get HST's position every minutes instead,
+    # and then interpolate...
+    # Position every minute should be good enough. If we were
+    # off by a minute, that would be a max of 6ms light travel time
+    # So with interpolation, we'll be dandy.
+    # Adding one minute to each side to avoid extrapolating
     elif np.isscalar(times) is False:
         if verbose:
             print('Multiple times: interpolating positions')
@@ -543,6 +629,37 @@ def get_hst_location(times, times_geo, hst_orb=None, in_col='Time', verbose=True
     return hstarr
 
 def calculate_hst_coordinates(times_geo, hstarr, has_hst_orb=False):
+    """_summary_
+
+    Parameters
+    ----------
+    times : array-like or `~astropy.time.Time`
+        Geocentric observation times in Modified Julian Date (MJD). 
+        Can be a scalar or an array.
+
+    hstarr : `array-like, ~astropy.units.Quantity`
+        HST position vector stored as a list of cartesian coordinates
+        in astropy units of AU.
+        
+    has_hst_orb : bool, optional
+        Flag to indicate whether the HST position vector in hstarr was
+        taken from an HST orbit file, by default False
+
+    Returns
+    -------
+    hstbary : list
+        Vector of HST's position relative to the Solar System barycenter.
+        
+    hst_itrs_coordinates : `~astropy.coordinates.builtin_frames.itrs.ITRS`
+        ITRS frame coordinates of HST's location relative to the Solar 
+        System barycenter.
+        
+    Notes
+    -----
+    - The HST vector returned from Horizons is treated as geocentric and then transformed
+      to ITRS/ICRS and added to Earth's barycentric position from Astropy's
+      ``get_body_barycentric('earth', ...)`` to obtain HST's barycentric position.
+    """
     
     with erfa_astrom.set(ErfaAstromInterpolator(1000 * u.s)):
         
@@ -589,429 +706,6 @@ def calculate_hst_coordinates(times_geo, hstarr, has_hst_orb=False):
                     earthICRS.z.to('AU').value + hst_itrs_coordinates.z.value]
     
     return hstbary, hst_itrs_coordinates
-
-def calc_delay_jpl(times, ra, dec, distance=1e9, verbose=True):
-    """Calculate the barycentric light-travel time correction for HST using JPL Horizons.
-
-    Compute the barycentric light-travel time delay for the Hubble Space Telescope (HST)
-    at the provided observation times and a target sky position (RA, Dec) by querying
-    JPL Horizons for HST's geocentric state-vector (or interpolating a regular-sampled
-    vector set) and combining it with Earth's barycentric position. A finite-distance
-    correction is applied to account for targets that are not at infinite distance.
-
-    Parameters
-    ----------
-    times : array-like or `~astropy.time.Time`
-        Observation times in Modified Julian Date (MJD). Can be a scalar or an array.
-        
-    ra : float or `~astropy.units.Quantity`
-        Right ascension of the target in degrees.
-        
-    dec : float or `~astropy.units.Quantity`
-        Declination of the target in degrees.
-        
-    distance : float, optional
-        Distance to the target (default ``1e9``). This value is used in the finite-distance
-        correction term. (See ``Notes`` for how it enters the equation.)
-        
-    verbose : bool, optional
-        If True (default) print diagnostics about interpolation, the finite-distance
-        correction, and the computed light-travel times.
-
-    Returns
-    -------
-    lt_time : `~astropy.units.Quantity`
-        Light-travel time correction(s) (Astropy Quantity) in days. This is the time
-        that should be added to the observation times to obtain barycentric arrival times,
-        and includes the finite-distance correction.
-
-    Notes
-    -----
-    - Uses the JPL planetary ephemeris (``jpl``) via Astropy's ``solar_system_ephemeris``
-      for consistency with Horizons.
-    - For multiple times the function queries Horizons for HST (-48, location 500)
-      with a regular step (1 minute) over the time range (plus a 5-minute margin)
-      and cubic-interpolates the returned vectors to the requested times. For a single
-      scalar time it queries Horizons directly at that epoch.
-    - The finite-distance correction implemented here follows the same algebraic
-      form used elsewhere in this codebase:
-        correction_term = (-0.5 / D) * (|r|^2 - (n·r)^2) / c
-      where `r` is the HST barycentric position vector, `n` is the unit vector toward
-      the target, `D` is the provided `distance`, and `c` is the speed of light.
-      The expression is converted into days before being returned.
-    - The HST vector returned from Horizons is treated as geocentric and then transformed
-      to ITRS/ICRS and added to Earth's barycentric position from Astropy's
-      ``get_body_barycentric('earth', ...)`` to obtain HST's barycentric position.
-    - Requires `astroquery` (Horizons), Astropy with the `jplephem` ephemeris available,
-      and a working internet connection for Horizons queries when not using a local orbit file.
-
-    Raises
-    ------
-    Exception
-        If the Horizons query or interpolation fails to produce vectors covering the
-        requested time range, or if the vector transformation cannot be performed.
-
-    Performance / Accuracy Considerations
-    -------------------------------------
-    - Interpolation at 1-minute sampling is a compromise between speed and accuracy;
-      a timing error of ~1 minute corresponds to a maximum light-travel time error of
-      a few milliseconds. Increase sampling density or query exact epochs if sub-ms
-      accuracy is required.
-    - Converting large arrays of epochs and coordinate transforms may be time-consuming.
-
-    Examples
-    --------
-    >>> # single time (MJD), RA/Dec in degrees
-    >>> barycentric_correction.calc_delay_jpl(55521.123, 210.8023, -47.393)
-    Finite distance correction: -7.804152203899432e-08 s
-    Light travel times: -405.56807173759836 s
-
-    >>> # multiple times
-    >>> times = [60200.123, 60200.124, 60200.125]
-    >>> lt_array = calc_delay_jpl(times, 210.8023, -47.393, distance=1e9, verbose=False)
-    """
-
-    # Using the JPL epehermis to be consistent with what Horizons gives
-    # see https://github.com/astropy/astropy/pull/11608
-    # Will require jplephem package, but that's already in stenv!
-    solar_system_ephemeris.set('jpl')
-
-    # Put times into Astropy time object
-    # We will query HST's position at this time
-    # We will be off by the HST-geocenter light travel time, FWIW
-    times_geo = Time(times,
-                     format='mjd',
-                     scale='utc',
-                     location=EarthLocation.\
-                     from_geocentric(0, 0, 0, unit='m'))
-
-    # Get HST's location
-
-    # Interpolate HST's position if more than just one time:
-    # We can't query all times to Horizons because there's
-    # too many. Let's get HST's position every minutes instead,
-    # and then interpolate...
-    # Position every minute should be good enough. If we were
-    # off by a minute, that would be a max of 6ms light travel time
-    # So with interpolation, we'll be dandy.
-    # Adding one minute to each side to avoid extrapolating
-
-    # Interpolate HST's position if more than just one time
-    if np.isscalar(times) is False:
-        if verbose:
-            print('Multiple times: interpolating positions')
-        # Query five minute before and after min and max times
-        # (In case we only query a minute of tags, we need more for spline)
-        # With a step of 1 min
-        epochs = {'start':(np.min(times_geo.tdb) - (5. * u.min)).\
-                  to_datetime().strftime("%Y-%m-%d %H:%M:%S"),
-                  'stop':(np.max(times_geo.tdb) + (5. * u.min)).\
-                  to_datetime().strftime("%Y-%m-%d %H:%M:%S"),
-                  'step':'1m'}
-        hstobj = Horizons(id='-48', location='500',
-                          epochs=epochs)
-
-        # Must be refplane = 'earth' not 'ecliptic
-        hstvec = hstobj.vectors(refplane='earth')
-
-        # Run interpolation
-        f_hstx = interp1d(hstvec['datetime_jd'], hstvec['x'], kind='cubic')
-        f_hsty = interp1d(hstvec['datetime_jd'], hstvec['y'], kind='cubic')
-        f_hstz = interp1d(hstvec['datetime_jd'], hstvec['z'], kind='cubic')
-
-        hstvecx = f_hstx(times_geo.tdb.jd)
-        hstvecy = f_hsty(times_geo.tdb.jd)
-        hstvecz = f_hstz(times_geo.tdb.jd)
-
-        # Re-package witn units
-        hstarr = [hstvecx, hstvecy, hstvecz] * u.AU
-
-    else:
-        # Query HST's gencentric position in JPL Horizons
-        hstobj = Horizons(id='-48', location='500',
-                          epochs=times_geo.tdb.jd)
-
-        # Must be refplane = 'earth' not 'ecliptic
-        hstvec = hstobj.vectors(refplane='earth')
-
-        # Re-package witn units
-        hstarr = [hstvec['x'][0], hstvec['y'][0], hstvec['z'][0]] * u.AU
-
-    # Convert from vector table to Astropy Quantity
-    # Then convert from GCRS to ITRS
-    # i.e., from Earth-centric to Barycentric
-    # This will still be the distance from HST to Earth,
-    # but in ICRS directions
-    # hstarr = [hstvec['x'][0], hstvec['y'][0], hstvec['z'][0]] * u.AU
-
-    with erfa_astrom.set(ErfaAstromInterpolator(1000 * u.s)):
-
-        # Make into GCRS object at proper times
-        hstGCRS = GCRS([hstarr[0],
-                        hstarr[1],
-                        hstarr[2]],
-                       representation_type='cartesian',
-                       obstime=times_geo)
-
-        # Convert to ICRS so we can add to Earth's barycentric location
-        # This takes a bit of time if there are many times to convert
-        hstITRS = hstGCRS.transform_to(ITRS(obstime=times_geo))
-
-
-        # Get Earth's position
-        # Can also take a few minutes with lots of times
-        earthICRS = get_body_barycentric('earth', times_geo)
-
-        # Add the two vectors together to get HST's position relative
-        # to the Solar System barycenter
-        hstbary = [earthICRS.x.to('AU').value + hstITRS.x.value,
-                   earthICRS.y.to('AU').value + hstITRS.y.value,
-                   earthICRS.z.to('AU').value + hstITRS.z.value]
-
-        # Define our targets location on the sky
-        target = SkyCoord(ra, dec, unit=(u.deg, u.deg), frame='icrs')
-
-        # Put into an array to dot with hstbary
-        # Cartesian makes this a unit vector in direction of target
-        target_arr = [target.cartesian.x.value,
-                      target.cartesian.y.value,
-                      target.cartesian.z.value]
-
-        # Calculate the finite-distance correction term
-
-        # correction_term = []
-        # for j in range(shape(hstbary)[1]):
-        #     hstbary_tmp = np.array([hstbary[0][j],hstbary[1][j],hstbary[2][j]])
-        #     correction_tmp = ((-0.5 / distance) *
-        #                        (np.sum((np.array(hstbary_tmp))**2) -
-        #                         (np.dot(target_arr, hstbary_tmp))**2) * u.AU /
-        #                        c.c).to('day')
-        #     correction_term.append(correction_tmp.value)
-        # correction_term*u.day
-
-        # This is wrong when hstbary is multiple points!
-        # The more points querried, the larger the correction lmaoooo
-        #correction_term = ((-0.5 / distance) *
-        #                   (np.sum((np.array(hstbary))**2) -
-        #                    (np.dot(target_arr, hstbary))**2) * u.AU /
-        #                   c.c).to('day')
-
-        # Actually just need to make the above sum over the correction axis
-        correction_term = ((-0.5 / distance) *
-                          (np.sum((np.array(hstbary))**2, axis=0) -
-                            (np.dot(target_arr, hstbary))**2) * u.AU /
-                          c.c).to('day')
-
-        if verbose:
-            if correction_term.size < 10:
-                print(f"Finite distance correction: {correction_term.to('s')}")
-            else:
-                print(f"Finite distance correction: \
-                      {correction_term[0:10].to('s')}")
-
-        # Let's now define HST's location relative to the barycenter
-        hstloc = EarthLocation.from_geocentric(x=hstITRS.x,
-                                               y=hstITRS.y,
-                                               z=hstITRS.z)
-        # Define the times, now with the correct location
-        hsttime = Time(times, format='mjd', scale='utc',
-                       location=hstloc)
-
-        # Calculate the light travel time,
-        # adding the correction term above.
-        # Then define the new barycenter times!
-        lt_time = hsttime.light_travel_time(target) + correction_term
-    if verbose:
-        if lt_time.size < 10:
-            print(f"Light travel times: {lt_time.to('s')}")
-        else:
-            print(f"Light travel times: {lt_time[0:10].to('s')}")
-    #ssbtimes = hsttime.tdb + lt_time
-
-    return lt_time
-
-
-def calc_delay_orbfile(times, ra, dec, hst_orb, distance=1e9, verbose=True, in_col='Time'):
-    """Calculate the light-travel time correction for HST observations using an orbit file.
-
-    This function computes the barycentric light-travel time delay for the Hubble Space Telescope (HST)
-    given a set of observation times and a target sky position (RA, Dec). It interpolates HST’s position
-    from a provided orbit file, combines it with Earth's barycentric position, and calculates the
-    light-travel time correction to the Solar System barycenter, including a finite-distance correction term.
-
-    Parameters
-    ----------
-    times : array-like or float
-        Observation times in Modified Julian Date (MJD), corresponding to HST exposures.
-        
-    ra : float
-        Right ascension of the target in degrees.
-        
-    dec : float
-        Declination of the target in degrees.
-        
-    hst_orb : str
-        Path to the HST orbit FITS file. This file must contain columns `TIME`, `X`, `Y`, and `Z`
-        giving HST’s position (in km) relative to the Earth's center.
-        
-    distance : float, optional
-        Distance to the target in kilometers (default is `1e9`, effectively infinite distance).
-        Used to apply the finite-distance light-travel time correction.
-        
-    verbose : bool, optional
-        If True (default), print information about the finite-distance correction
-        and the calculated light-travel times.
-        
-    in_col : str, optional
-        If orbital file uses something other than 'Time' for the time axis, replace
-        with the correct column name.
-
-    Returns
-    -------
-    lt_time : `~astropy.units.Quantity`
-        The barycentric light-travel time correction(s) in days, including the finite-distance correction term.
-
-    Notes
-    -----
-    - Uses the JPL planetary ephemeris (`jplephem`) for consistency with NASA Horizons.
-    - Interpolates HST’s orbital position at each observation time using cubic interpolation
-      to avoid excessive Horizons queries.
-    - The resulting correction term accounts for HST’s motion relative to the Solar System barycenter.
-    - The finite-distance correction term scales as `~(r^2 - (r·n)^2) / (2cD)`, where
-      `r` is HST’s barycentric position vector, `n` is the unit vector toward the target,
-      `c` is the speed of light, and `D` is the target distance.
-
-    Raises
-    ------
-    OrbFileError
-        If the orbit file does not cover the requested time range.
-
-    Examples
-    --------
-    >>> barycentric_correction.calc_delay_orbfile([55521.123], 210.8023, -47.393, hst_orb='pubj0000r.fit')
-    Finite distance correction: [-7.80563708e-08] s
-    Light travel times: [-405.56687377] s
-    """
-
-    # Using the JPL epehermis to be consistent with what Horizons gives
-    # see https://github.com/astropy/astropy/pull/11608
-    # Will require jplephem package, but that's already in stenv!
-    solar_system_ephemeris.set('jpl')
-
-    # Put times into Astropy time object
-    # We will query HST's position at this time
-    # We will be off by the HST-geocenter light travel time, FWIW
-    times_geo = Time(times,
-                     format='mjd',
-                     scale='utc',
-                     location=EarthLocation.\
-                     from_geocentric(0, 0, 0, unit='m'))
-
-    # Get HST's location
-
-    # Interpolate HST's position if more than just one time:
-    # We can't query all times to Horizons because there's
-    # too many. Let's get HST's position every minutes instead,
-    # and then interpolate...
-    # Position every minute should be good enough. If we were
-    # off by a minute, that would be a max of 6ms light travel time
-    # So with interpolation, we'll be dandy.
-    # Adding one minute to each side to avoid extrapolating
-
-
-    # HST ORB file
-    with fits.open(hst_orb) as hdu_orb:
-        f_hstx = interp1d(float(hdu_orb[1].header['FIRSTMJD']) + hdu_orb[1].data[in_col].astype(np.float64) / 86400, hdu_orb[1].data['X'], kind='cubic')
-        f_hsty = interp1d(float(hdu_orb[1].header['FIRSTMJD']) + hdu_orb[1].data[in_col].astype(np.float64) / 86400, hdu_orb[1].data['Y'], kind='cubic')
-        f_hstz = interp1d(float(hdu_orb[1].header['FIRSTMJD']) + hdu_orb[1].data[in_col].astype(np.float64) / 86400, hdu_orb[1].data['Z'], kind='cubic')
-
-        try:
-            hstvecx = f_hstx(times_geo.tdb.mjd)
-            hstvecy = f_hsty(times_geo.tdb.mjd)
-            hstvecz = f_hstz(times_geo.tdb.mjd)
-        except ValueError as e:
-            raise OrbFileError('Orbit file does not match observation times.  '
-                               'Make sure you have got the correct one.') from e
-
-        hstarr = [hstvecx, hstvecy, hstvecz] * u.km
-
-
-    # Convert from vector table to Astropy Quantity
-    # Then convert from GCRS to ITRS
-    # i.e., from Earth-centric to Barycentric
-    # This will still be the distance from HST to Earth,
-    # but in ITRS directions
-    #hstarr = [hstvec['x'][0], hstvec['y'][0], hstvec['z'][0]] * u.AU
-
-    with erfa_astrom.set(ErfaAstromInterpolator(1000 * u.s)):
-
-        # Make into ICRS object at proper times
-        hstICRS = ICRS([hstarr[0],
-                        hstarr[1],
-                        hstarr[2]],
-                       representation_type='cartesian')
-
-        # Get Earth's position
-        # Can also take a few minutes with lots of times
-        earthICRS = get_body_barycentric('earth', times_geo)
-
-        # Add the two vectors together to get HST's position relative
-        # to the Solar System barycenter
-        # We keep this in an array format to calculate the correction term,
-        # but convert to ICRS coordinate for light travel times.
-        hstbary = [earthICRS.x.to('AU').value + hstICRS.x.to('AU').value,
-                   earthICRS.y.to('AU').value + hstICRS.y.to('AU').value,
-                   earthICRS.z.to('AU').value + hstICRS.z.to('AU').value]
-
-        hstbary_icrs = ICRS(hstbary * u.AU, representation_type='cartesian')
-
-        # from_geocentric() is expecting an ITRS coordinate, so we need to convert.
-        hstbary_itrs = hstbary_icrs.transform_to(ITRS(obstime=times_geo))
-        itrs_cartesian = hstbary_itrs.cartesian
-
-        # Define our targets location on the sky
-        target = SkyCoord(ra, dec, unit=(u.deg, u.deg), frame='icrs')
-
-        # Put into an array to dot with hstbary
-        # Cartesian makes this a unit vector in direction of target
-        target_arr = [target.cartesian.x.value,
-                      target.cartesian.y.value,
-                      target.cartesian.z.value]
-
-        # Calculate the finite-distance correction term
-        correction_term = ((-0.5 / distance) *
-                           (np.sum((np.array(hstbary))**2) -
-                            (np.dot(target_arr, hstbary))**2) * u.AU /
-                           c.c).to('day')
-
-        if verbose:
-            if correction_term.size < 10:
-                print(f"Finite distance correction: {correction_term.to('s')}")
-            else:
-                print(f"Finite distance correction: \
-                      {correction_term[0:10].to('s')}")
-
-        # Let's now define HST's location relative to the barycenter
-        # from_geocentric() is expecting an ITRS coordinate!
-        hstloc = EarthLocation.from_geocentric(x=itrs_cartesian.x,
-                                               y=itrs_cartesian.y,
-                                               z=itrs_cartesian.z)
-        # Define the times, now with the correct location
-        hsttime = Time(times, format='mjd', scale='utc',
-                       location=hstloc)
-
-        # Calculate the light travel time,
-        # adding the correction term above.
-        # Then define the new barycenter times!
-        lt_time = hsttime.light_travel_time(target) + correction_term
-    if verbose:
-        if lt_time.size < 10:
-            print(f"Light travel times: {lt_time.to('s')}")
-        else:
-            print(f"Light travel times: {lt_time[0:10].to('s')}")
-    #ssbtimes = hsttime.tdb + lt_time
-
-    return lt_time
 
 
 def odelay_file_compare(file1, file2):
