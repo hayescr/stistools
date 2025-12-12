@@ -166,7 +166,7 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
                 print(f"Copying {in_table_file} to {filename}")
             shutil.copy(in_table_file, filename)
             
-        in_hdul = fits.open(filename)
+        in_hdul = fits.open(filename, mode='update')
 
         # determine the file type, based on the first extension
         # original code (ln 124) contains some kind of catch all
@@ -185,6 +185,7 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
         in_hdul[0].header['DELAYCOR'] = "PERFORM"
 
         # COS has no TEXPSTRT in primary header, so use EXPSTART in first ext
+        # TODO remove mjd2 since it isn't used?
         if in_hdul[0].header['INSTRUME'] == "STIS":
             mjd1 = in_hdul[0].header['TEXPSTRT']
             mjd2 = in_hdul[0].header['TEXPEND']
@@ -227,17 +228,11 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             if 'GTI' in in_hdul:
                 gti_tab = in_hdul['GTI'].data
                 for row in gti_tab:
-                    tm = row['START']
-                    epoch = mjd1 + tm / SECPERDAY
-                    delta_sec = calc_delay(epoch, ra, dec, hst_orb, distance=distance)
-                    
-                    row['START'] = tm + (delta_sec - t0_delay).value * SECPERDAY
-
-                    tm = row['STOP']
-                    epoch = mjd1 + tm / SECPERDAY
-                    delta_sec = calc_delay(epoch, ra, dec, hst_orb, distance=distance)
-
-                    row['STOP'] = tm + (delta_sec - t0_delay).value * SECPERDAY
+                    for key in ['START', 'STOP']:
+                        tm = row[key]
+                        epoch = mjd1 + tm / SECPERDAY
+                        delta_sec = calc_delay(epoch, ra, dec, hst_orb, distance=distance)
+                        row[key] = tm + (delta_sec - t0_delay).value * SECPERDAY
 
                 in_hdul.flush()
 
@@ -257,7 +252,6 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
         for e_indx in range(1, nevents_tab + 1):
             events_tab = in_hdul['EVENTS', e_indx]
             mjd1 = events_tab.header['EXPSTART']
-            mjd2 = events_tab.header['EXPEND']
 
             # find the time (since EXPSTART) column in the table
             nrows = len(events_tab.data[in_col])
@@ -284,17 +278,12 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             in_hdul['EVENTS', e_indx].data[in_col] = time_array
 
             # add delaytime to EXPSTART and EXPEND, and update header
-            # TODO do we need to pass in_col here?
-            delta_sec = calc_delay(mjd1, ra, dec, hst_orb, distance=distance)
+            for key in ['EXPSTART', 'EXPEND']:
+                mjd = events_tab.header[key]
+                # TODO do we need to pass in_col here?
+                delta_sec = calc_delay(mjd, ra, dec, hst_orb, distance=distance)
+                events_tab.header[key] = mjd + delta_sec.value
 
-            events_tab.header['EXPSTART'] = mjd1 + delta_sec.value
-
-
-            # DOUBLE CHECK FOR TYPO, should probably be mjd2
-            # TODO do we need to pass in_col here?
-            delta_sec = calc_delay(mjd2, ra, dec, hst_orb, distance=distance)
-
-            events_tab.header['EXPEND'] = mjd2 + delta_sec.value
             in_hdul.flush()
             if verbose:
                 print(f"    [EVENTS,{e_indx}] extension has been updated")
@@ -310,17 +299,12 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             modified = False
 
             # add delaytime to EXPSTART and EXPEND, and update header
-            if "EXPSTART" in cur_tab.header:
-                mjd1 = cur_tab.header['EXPSTART']
-                delta_sec = calc_delay(mjd1, ra, dec, hst_orb, distance=distance)
-                cur_tab.header['EXPSTART'] = mjd1 + delta_sec.value
-                modified = True
-
-            if "EXPEND" in cur_tab.header:
-                mjd2 = cur_tab.header['EXPEND']
-                delta_sec = calc_delay(mjd2, ra, dec, hst_orb, distance=distance)
-                cur_tab.header['EXPEND'] = mjd2 + delta_sec.value
-                modified = True
+            for key in ['EXPSTART', 'EXPEND']:
+                if key in cur_tab.header:
+                    mjd = cur_tab.header[key]
+                    delta_sec = calc_delay(mjd, ra, dec, hst_orb, distance=distance)
+                    cur_tab.header[key] = mjd + delta_sec.value
+                    modified = True
 
             in_hdul.flush()
             if verbose and modified:
@@ -335,15 +319,11 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
         # add delaytime to TEXPSTRT and TEXPEND, and update primary header
         # COS has no TEXPSTRT in primary header
         if in_hdul[0].header['INSTRUME'] == "STIS":
-            mjd1 = in_hdul[0].header['TEXPSTRT']
-            delta_sec = calc_delay(mjd1, ra, dec, hst_orb, distance=distance)
+            for key in ['TEXPSTRT', 'TEXPEND']:
+                mjd = in_hdul[0].header[key]
+                delta_sec = calc_delay(mjd, ra, dec, hst_orb, distance=distance)
 
-            in_hdul[0].header['TEXPSTRT'] = mjd1 + delta_sec.value
-
-            mjd2 = in_hdul[0].header['TEXPEND']
-            delta_sec = calc_delay(mjd2, ra, dec, hst_orb, distance=distance)
-            
-            in_hdul[0].header['TEXPEND'] = mjd2 + delta_sec.value
+                in_hdul[0].header[key] = mjd + delta_sec.value
 
         # add keyword to flag the fact that the times have been corrected
         in_hdul[0].header['DELAYCOR'] = ("COMPLETE",
