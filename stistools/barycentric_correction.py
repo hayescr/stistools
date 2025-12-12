@@ -151,6 +151,7 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
     if time_script:
         tstart = time.time()
 
+    # TODO need to address errors if single input file and outfile name are submitted
     for ii, in_table_file in enumerate(table_names):
 
         if verbose:
@@ -410,6 +411,7 @@ def calc_delay(times, ra, dec, hst_orb=None, distance=1e9, in_col='Time', verbos
     # Using the JPL epehermis to be consistent with what Horizons gives
     # see https://github.com/astropy/astropy/pull/11608
     # Will require jplephem package, but that's already in stenv!
+    # TODO need to add jplephem to package requirements
     solar_system_ephemeris.set('jpl')
 
     # Put times into Astropy time object
