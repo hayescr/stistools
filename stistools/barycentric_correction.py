@@ -271,6 +271,7 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             #re-written to do all rows at once, so we can interpolate times,
             #instead of calling Horizons 4.5 million times
             epoch_array = mjd1 + time_array / SECPERDAY
+            # TODO do we need to pass in_col here?
             delta_sec = calc_delay(epoch_array, ra, dec, hst_orb, distance=distance)
 
             # This is correcting for the difference between the new time interval
@@ -282,12 +283,14 @@ def barycentric_correction(table_names, verbose=True, distance=1e9,
             in_hdul['EVENTS', e_indx].data[in_col] = time_array
 
             # add delaytime to EXPSTART and EXPEND, and update header
+            # TODO do we need to pass in_col here?
             delta_sec = calc_delay(mjd1, ra, dec, hst_orb, distance=distance)
 
             events_tab.header['EXPSTART'] = mjd1 + delta_sec.value
 
 
             # DOUBLE CHECK FOR TYPO, should probably be mjd2
+            # TODO do we need to pass in_col here?
             delta_sec = calc_delay(mjd2, ra, dec, hst_orb, distance=distance)
 
             events_tab.header['EXPEND'] = mjd2 + delta_sec.value
